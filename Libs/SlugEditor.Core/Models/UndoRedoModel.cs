@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Collections.Specialized;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
@@ -10,6 +11,7 @@ public class UndoRedoModel : ModelBase
 {
     private readonly Dictionary<(INotifyPropertyChanged Target, string PropertyName), object?> _nestedPropertyCache = [];
     private readonly List<(INotifyPropertyChanged Target, PropertyChangedEventHandler Handler)> _nestedSubscriptions = [];
+    private readonly List<(INotifyCollectionChanged Target, NotifyCollectionChangedEventHandler Handler)> _nestedCollectionSubscriptions = [];
     private int _nestedReplayDepth;
 
     protected UndoRedoModel(History? history = null)
@@ -126,6 +128,155 @@ public class UndoRedoModel : ModelBase
 
         nestedObject.PropertyChanged += handler;
         _nestedSubscriptions.Add((nestedObject, handler));
+    }
+
+    protected void TrackNestedCollection<T>(
+        IList<T> list,
+        INotifyCollectionChanged collectionObject,
+        string ownerPropertyName)
+    {
+        ArgumentNullException.ThrowIfNull(list);
+        ArgumentNullException.ThrowIfNull(collectionObject);
+        ArgumentException.ThrowIfNullOrWhiteSpace(ownerPropertyName);
+
+        NotifyCollectionChangedEventHandler handler = (_, e) =>
+        {
+            if (_nestedReplayDepth > 0 || History.IsInUndoing)
+            {
+                OnPropertyChanged(ownerPropertyName);
+                return;
+            }
+
+            switch (e.Action)
+            {
+                case NotifyCollectionChangedAction.Add:
+                {
+                    if (e.NewItems is null || e.NewItems.Count is 0 || e.NewStartingIndex < 0)
+                    {
+                        return;
+                    }
+
+                    var item = (T)e.NewItems[0]!;
+                    var index = e.NewStartingIndex;
+                    History.Push(
+                        undo: () =>
+                        {
+                            _nestedReplayDepth++;
+                            try
+                            {
+                                list.RemoveAt(index);
+                            }
+                            finally
+                            {
+                                _nestedReplayDepth--;
+                            }
+                            OnPropertyChanged(ownerPropertyName);
+                        },
+                        redo: () =>
+                        {
+                            _nestedReplayDepth++;
+                            try
+                            {
+                                list.Insert(index, item);
+                            }
+                            finally
+                            {
+                                _nestedReplayDepth--;
+                            }
+                            OnPropertyChanged(ownerPropertyName);
+                        });
+
+                    OnPropertyChanged(ownerPropertyName);
+                    break;
+                }
+                case NotifyCollectionChangedAction.Remove:
+                {
+                    if (e.OldItems is null || e.OldItems.Count is 0 || e.OldStartingIndex < 0)
+                    {
+                        return;
+                    }
+
+                    var item = (T)e.OldItems[0]!;
+                    var index = e.OldStartingIndex;
+                    History.Push(
+                        undo: () =>
+                        {
+                            _nestedReplayDepth++;
+                            try
+                            {
+                                list.Insert(index, item);
+                            }
+                            finally
+                            {
+                                _nestedReplayDepth--;
+                            }
+                            OnPropertyChanged(ownerPropertyName);
+                        },
+                        redo: () =>
+                        {
+                            _nestedReplayDepth++;
+                            try
+                            {
+                                list.RemoveAt(index);
+                            }
+                            finally
+                            {
+                                _nestedReplayDepth--;
+                            }
+                            OnPropertyChanged(ownerPropertyName);
+                        });
+
+                    OnPropertyChanged(ownerPropertyName);
+                    break;
+                }
+                case NotifyCollectionChangedAction.Replace:
+                {
+                    if (e.NewItems is null || e.NewItems.Count is 0 || e.OldItems is null || e.OldItems.Count is 0 || e.NewStartingIndex < 0)
+                    {
+                        return;
+                    }
+
+                    var newItem = (T)e.NewItems[0]!;
+                    var oldItem = (T)e.OldItems[0]!;
+                    var index = e.NewStartingIndex;
+                    History.Push(
+                        undo: () =>
+                        {
+                            _nestedReplayDepth++;
+                            try
+                            {
+                                list[index] = oldItem;
+                            }
+                            finally
+                            {
+                                _nestedReplayDepth--;
+                            }
+                            OnPropertyChanged(ownerPropertyName);
+                        },
+                        redo: () =>
+                        {
+                            _nestedReplayDepth++;
+                            try
+                            {
+                                list[index] = newItem;
+                            }
+                            finally
+                            {
+                                _nestedReplayDepth--;
+                            }
+                            OnPropertyChanged(ownerPropertyName);
+                        });
+
+                    OnPropertyChanged(ownerPropertyName);
+                    break;
+                }
+                default:
+                    break;
+            }
+        };
+
+        collectionObject.CollectionChanged += handler;
+        _nestedCollectionSubscriptions.Add((collectionObject, handler));
     }
 
     private void SetNestedPropertyValue(INotifyPropertyChanged target, PropertyInfo property, object? value)

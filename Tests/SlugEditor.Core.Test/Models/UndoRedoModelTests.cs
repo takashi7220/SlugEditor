@@ -1,6 +1,7 @@
 using CoreMatrix3x3 = SlugEditor.Core.Properties.Matrix3x3;
 using CoreMatrix4x4 = SlugEditor.Core.Properties.Matrix4x4;
 using SlugEditor.Core.Models;
+using CoreTrackedList = SlugEditor.Core.Properties.TrackedList<int>;
 using CoreVector2 = SlugEditor.Core.Properties.Vector2;
 using CoreVector3 = SlugEditor.Core.Properties.Vector3;
 using CoreVector4 = SlugEditor.Core.Properties.Vector4;
@@ -99,7 +100,7 @@ public sealed class UndoRedoModelTests
     {
         var model = new SampleUndoRedoModel();
         var oldList = model.Items;
-        var newList = new List<int> { 1, 2, 3 };
+        var newList = new CoreTrackedList { 1, 2, 3 };
 
         model.Items = newList;
         Assert.Same(newList, model.Items);
@@ -109,6 +110,38 @@ public sealed class UndoRedoModelTests
 
         model.History.Redo();
         Assert.Same(newList, model.Items);
+    }
+
+    [Fact]
+    public void TrackedList_DirectAddRemoveReplace_CanUndoRedo()
+    {
+        var model = new SampleUndoRedoModel();
+
+        model.Items.Add(10);
+        model.Items.Add(20);
+        model.Items[1] = 99;
+        model.Items.RemoveAt(0);
+
+        Assert.Equal([99], model.Items);
+        Assert.Equal(4, model.History.UndoCount);
+
+        model.History.Undo();
+        Assert.Equal([10, 99], model.Items);
+
+        model.History.Undo();
+        Assert.Equal([10, 20], model.Items);
+
+        model.History.Undo();
+        Assert.Equal([10], model.Items);
+
+        model.History.Undo();
+        Assert.Empty(model.Items);
+
+        model.History.Redo();
+        model.History.Redo();
+        model.History.Redo();
+        model.History.Redo();
+        Assert.Equal([99], model.Items);
     }
 
     [Fact]
@@ -314,7 +347,7 @@ public sealed class UndoRedoModelTests
         private int _value;
         private string _text = string.Empty;
         private float _rate;
-        private List<int> _items = [];
+        private CoreTrackedList _items = [];
         private CoreVector2 _v2 = new(0, 0);
         private CoreVector3 _v3 = new(0, 0, 0);
         private CoreVector4 _v4 = new(0, 0, 0, 0);
@@ -328,6 +361,7 @@ public sealed class UndoRedoModelTests
             TrackNestedProperties(_v4, nameof(V4), "Value");
             TrackNestedProperties(_m3, nameof(M3));
             TrackNestedProperties(_m4, nameof(M4), "Value");
+            TrackNestedCollection(_items, _items, nameof(Items));
         }
 
         public int Value
@@ -348,7 +382,7 @@ public sealed class UndoRedoModelTests
             set => SetTrackedProperty(ref _rate, value);
         }
 
-        public List<int> Items
+        public CoreTrackedList Items
         {
             get => _items;
             set => SetTrackedProperty(ref _items, value);
