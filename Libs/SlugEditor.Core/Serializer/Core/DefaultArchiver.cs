@@ -1,6 +1,5 @@
 using System.Collections;
 using System.Reflection;
-using System.Text.Json;
 
 namespace SlugEditor.Core.Serializer;
 
@@ -195,82 +194,66 @@ public sealed class DefaultArchiver : IArchiver
             return null;
         }
 
-        if (rawValue is JsonElement json)
-        {
-            return ConvertJsonElement(type, json);
-        }
-
         if (type.IsEnum)
         {
             return Enum.Parse(type, rawValue.ToString() ?? string.Empty, ignoreCase: true);
         }
 
-        return Convert.ChangeType(rawValue, type);
-    }
-
-    private static object? ConvertJsonElement(Type type, JsonElement json)
-    {
         if (type == typeof(string))
         {
-            return json.GetString();
+            return rawValue.ToString();
         }
 
         if (type == typeof(int))
         {
-            return json.GetInt32();
+            return Convert.ToInt32(rawValue);
         }
 
         if (type == typeof(long))
         {
-            return json.GetInt64();
+            return Convert.ToInt64(rawValue);
         }
 
         if (type == typeof(float))
         {
-            return json.GetSingle();
+            return Convert.ToSingle(rawValue);
         }
 
         if (type == typeof(double))
         {
-            return json.GetDouble();
+            return Convert.ToDouble(rawValue);
         }
 
         if (type == typeof(decimal))
         {
-            return json.GetDecimal();
+            return Convert.ToDecimal(rawValue);
         }
 
         if (type == typeof(bool))
         {
-            return json.GetBoolean();
+            return Convert.ToBoolean(rawValue);
         }
 
         if (type == typeof(Guid))
         {
-            return json.GetGuid();
+            return Guid.Parse(rawValue.ToString() ?? string.Empty);
         }
 
         if (type == typeof(DateTime))
         {
-            return json.GetDateTime();
+            return DateTime.Parse(rawValue.ToString() ?? string.Empty);
         }
 
         if (type == typeof(DateTimeOffset))
         {
-            return json.GetDateTimeOffset();
+            return DateTimeOffset.Parse(rawValue.ToString() ?? string.Empty);
         }
 
         if (type == typeof(TimeSpan))
         {
-            return TimeSpan.Parse(json.GetString() ?? "00:00:00");
+            return TimeSpan.Parse(rawValue.ToString() ?? "00:00:00");
         }
 
-        if (type.IsEnum)
-        {
-            return Enum.Parse(type, json.GetString() ?? string.Empty, ignoreCase: true);
-        }
-
-        var raw = json.GetRawText();
-        return JsonSerializer.Deserialize(raw, type);
+        return Convert.ChangeType(rawValue, type);
     }
 }
