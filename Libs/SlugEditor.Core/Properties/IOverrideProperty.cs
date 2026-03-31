@@ -8,5 +8,5 @@ public interface IOverrideProperty
 {
     public void Reset();
 
-    public bool IsOverride { get => false; }
+    public bool IsOverride();
 }
