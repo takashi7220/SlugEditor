@@ -3,7 +3,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
 namespace SlugEditor.Core.Models;
-public class ModelBase : INotifyPropertyChanged, IModel
+public class ModelBase : IModel
 {
     public event PropertyChangedEventHandler? PropertyChanged;
 
