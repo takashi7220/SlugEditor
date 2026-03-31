@@ -1,5 +1,3 @@
-using Xunit;
-
 namespace SlugEditor.Test;
 
 public static class AssertEx
@@ -13,7 +11,7 @@ public static class AssertEx
         ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
 
         var changes = tracker.Changes.Where(x => string.Equals(x, propertyName, StringComparison.Ordinal)).ToArray();
-        Assert.True(
+        TestAssert.True(
             changes.Length == 1,
             because ?? $"Expected exactly one PropertyChanged for '{propertyName}', but got {changes.Length}.");
     }
@@ -21,7 +19,7 @@ public static class AssertEx
     public static void NoPropertyChanged(PropertyChangedTracker tracker, string? because = null)
     {
         ArgumentNullException.ThrowIfNull(tracker);
-        Assert.True(
+        TestAssert.True(
             tracker.Changes.Count == 0,
             because ?? $"Expected no PropertyChanged events, but got {tracker.Changes.Count}.");
     }
@@ -30,6 +28,6 @@ public static class AssertEx
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(actual);
-        Assert.Equal(expected.ToArray(), actual.ToArray());
+        TestAssert.Equal(expected.ToArray(), actual.ToArray());
     }
 }

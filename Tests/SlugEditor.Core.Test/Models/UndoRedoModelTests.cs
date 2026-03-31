@@ -6,7 +6,6 @@ using CoreVector2 = SlugEditor.Core.Properties.Vector2;
 using CoreVector3 = SlugEditor.Core.Properties.Vector3;
 using CoreVector4 = SlugEditor.Core.Properties.Vector4;
 using SlugEditor.Test;
-using Xunit;
 
 namespace SlugEditor.Core.Test.Models;
 
