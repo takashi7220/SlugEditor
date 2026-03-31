@@ -1,7 +1,6 @@
 <Solution>
   <Folder Name="/Libs/">
     <Project Path="Libs/SlugEditor.Core/SlugEditor.Core.csproj" Id="29655f8b-2496-4c3d-bee3-bdf4d603726e" />
-    <Project Path="Libs/SlugEditor.Models/SlugEditor.Models.csproj" Id="f82810cf-5882-44f4-88fb-f0ac1680d32c" />
     <Project Path="Libs/SlugEditor.ViewModels/SlugEditor.ViewModels.csproj" Id="29f894ee-62ab-4f32-94f5-b72bd6d36d75" />
     <Project Path="Libs/SlugEditor.Views/SlugEditor.Views.csproj" Id="d43be151-5264-40d0-a70d-d55de105a428" />
   </Folder>
