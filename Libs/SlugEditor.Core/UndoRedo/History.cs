@@ -17,15 +17,20 @@ public class History : INotifyPropertyChanged, IDisposable
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
-    internal readonly CollectionChangedWeakEventManager CollectionChangedWeakEventManager = new();
-
     public void Dispose()
     {
+        _batchHistory?.Dispose();
+        _batchHistory = null;
+        _undoStack.Clear();
+        _redoStack.Clear();
     }
 
     public void BeginPause()
     {
-        ++PauseDepth;
+        var currentDepth = PauseBatchDepth;
+
+        PauseDepth++;
+        InvokePropertyChanged(currentDepth);
     }
 
     public void EndPause()
@@ -35,149 +40,243 @@ public class History : INotifyPropertyChanged, IDisposable
             throw new InvalidOperationException("Pause is not begun.");
         }
 
-        --PauseDepth;
+        var currentDepth = PauseBatchDepth;
+
+        PauseDepth--;
+        InvokePropertyChanged(currentDepth);
     }
 
     public void BeginBatch()
     {
-        ++BatchDepth;
+        var currentDepth = PauseBatchDepth;
 
+        BatchDepth++;
         if (BatchDepth is 1)
         {
-            BeginBatchInternal();
+            _batchHistory = new BatchHistory();
         }
 
-        public void EndBatch()
+        InvokePropertyChanged(currentDepth);
+    }
+
+    public void EndBatch()
+    {
+        if (BatchDepth is 0)
         {
-            if (BatchDepth is 0)
-            {
-                throw new InvalidOperationException("Batch recording has not begun.");
-            }
-
-            --BatchDepth;
-
-            if (BatchDepth is 0)
-            {
-                EndBatchInternal();
-            }
+            throw new InvalidOperationException("Batch recording has not begun.");
         }
 
-        public void Undo()
+        var currentFlags = CanUndoRedoClear;
+        var currentUndoRedoCount = UndoRedoCount;
+        var currentDepth = PauseBatchDepth;
+
+        BatchDepth--;
+        if (BatchDepth is 0)
         {
-            if (IsInBatch)
+            var batchHistory = _batchHistory;
+            _batchHistory = null;
+
+            if (batchHistory is not null && batchHistory.CanUndo)
             {
-                throw new InvalidOperationException("Can't call Undo() during batch recording.");
+                _undoStack.Push(new HistoryAction(batchHistory.UndoAll, batchHistory.RedoAll));
+
+                if (_redoStack.Count > 0)
+                {
+                    _redoStack.Clear();
+                }
             }
 
-            if (IsInPaused)
-            {
-                throw new InvalidOperationException("Can't call Undo() during in paused.");
-            }
-
-            if (CanUndo is false)
-            {
-                return;
-            }
-
-            var currentFlags = CanUndoRedoClear;
-            var currentUndoRedoCount = UndoRedoCount;
-            var currentDepth = PauseBatchDepth;
-
-            var action = m_undoStack.Pop();
-
-            try
-            {
-                IsInUndoing = true;
-                action.Undo();
-            }
-            finally
-            {
-                IsInUndoing = false;
-            }
-
-            m_redoStack.Push(action);
-
-            InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+            batchHistory?.Dispose();
         }
 
-        public void Redo()
+        InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+    }
+
+    public void Undo()
+    {
+        if (IsInBatch)
         {
-            if (IsInBatch)
-            {
-                throw new InvalidOperationException("Can't call Redo() during batch recording.");
-            }
-
-            if (IsInPaused)
-            {
-                throw new InvalidOperationException("Can't call Redo() during in paused.");
-            }
-
-            if (CanRedo is false)
-            {
-                return;
-            }
-
-            var currentFlags = CanUndoRedoClear;
-            var currentUndoRedoCount = UndoRedoCount;
-            var currentDepth = PauseBatchDepth;
-
-            var action = m_redoStack.Pop();
-
-            try
-            {
-                IsInUndoing = true;
-                action.Redo();
-            }
-            finally
-            {
-                IsInUndoing = false;
-            }
-
-            m_undoStack.Push(action);
-
-            InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+            throw new InvalidOperationException("Can't call Undo() during batch recording.");
         }
 
-        public void Push(Action undo, Action redo)
+        if (IsInPaused)
         {
-            if (IsInPaused)
-            {
-                return;
-            }
-
-            if (IsInBatch)
-            {
-                _ = m_batchHistory ?? throw new NullReferenceException();
-
-                m_batchHistory.Push(undo, redo);
-                return;
-            }
-
-            var currentFlags = CanUndoRedoClear;
-            var currentUndoRedoCount = UndoRedoCount;
-            var currentDepth = PauseBatchDepth;
-
-            m_undoStack.Push(new HistoryAction(undo, redo));
-
-            if (m_redoStack.Count > 0)
-            {
-                m_redoStack.Clear();
-            }
-
-            InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+            throw new InvalidOperationException("Can't call Undo() while paused.");
         }
 
-        public void Clear()
+        if (!CanUndo)
         {
-            var currentFlags = CanUndoRedoClear;
-            var currentUndoRedoCount = UndoRedoCount;
-            var currentDepth = PauseBatchDepth;
-
-            m_undoStack.Clear();
-            m_redoStack.Clear();
-
-            InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+            return;
         }
+
+        var currentFlags = CanUndoRedoClear;
+        var currentUndoRedoCount = UndoRedoCount;
+        var currentIsInUndoing = IsInUndoing;
+
+        var action = _undoStack.Pop();
+        try
+        {
+            IsInUndoing = true;
+            action.Undo();
+        }
+        finally
+        {
+            IsInUndoing = false;
+        }
+
+        _redoStack.Push(action);
+
+        InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentIsInUndoing);
+    }
+
+    public void Redo()
+    {
+        if (IsInBatch)
+        {
+            throw new InvalidOperationException("Can't call Redo() during batch recording.");
+        }
+
+        if (IsInPaused)
+        {
+            throw new InvalidOperationException("Can't call Redo() while paused.");
+        }
+
+        if (!CanRedo)
+        {
+            return;
+        }
+
+        var currentFlags = CanUndoRedoClear;
+        var currentUndoRedoCount = UndoRedoCount;
+        var currentIsInUndoing = IsInUndoing;
+
+        var action = _redoStack.Pop();
+        try
+        {
+            IsInUndoing = true;
+            action.Redo();
+        }
+        finally
+        {
+            IsInUndoing = false;
+        }
+
+        _undoStack.Push(action);
+
+        InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentIsInUndoing);
+    }
+
+    public void Push(Action undo, Action redo)
+    {
+        ArgumentNullException.ThrowIfNull(undo);
+        ArgumentNullException.ThrowIfNull(redo);
+
+        if (IsInPaused)
+        {
+            return;
+        }
+
+        if (IsInBatch)
+        {
+            _ = _batchHistory ?? throw new InvalidOperationException("Batch recording has not begun.");
+            _batchHistory.Push(undo, redo);
+            return;
+        }
+
+        var currentFlags = CanUndoRedoClear;
+        var currentUndoRedoCount = UndoRedoCount;
+
+        _undoStack.Push(new HistoryAction(undo, redo));
+        if (_redoStack.Count > 0)
+        {
+            _redoStack.Clear();
+        }
+
+        InvokePropertyChanged(currentFlags, currentUndoRedoCount);
+    }
+
+    public void Clear()
+    {
+        if (_undoStack.Count is 0 && _redoStack.Count is 0)
+        {
+            return;
+        }
+
+        var currentFlags = CanUndoRedoClear;
+        var currentUndoRedoCount = UndoRedoCount;
+
+        _undoStack.Clear();
+        _redoStack.Clear();
+
+        InvokePropertyChanged(currentFlags, currentUndoRedoCount);
+    }
+
+    private void InvokePropertyChanged(
+        (bool CanUndo, bool CanRedo, bool CanClear) previousFlags,
+        (int UndoCount, int RedoCount) previousCount)
+    {
+        if (previousFlags.CanUndo != CanUndo)
+        {
+            PropertyChanged?.Invoke(this, CanUndoArgs);
+        }
+
+        if (previousFlags.CanRedo != CanRedo)
+        {
+            PropertyChanged?.Invoke(this, CanRedoArgs);
+        }
+
+        if (previousFlags.CanClear != CanClear)
+        {
+            PropertyChanged?.Invoke(this, CanClearArgs);
+        }
+
+        if (previousCount.UndoCount != UndoCount)
+        {
+            PropertyChanged?.Invoke(this, UndoCountArgs);
+        }
+
+        if (previousCount.RedoCount != RedoCount)
+        {
+            PropertyChanged?.Invoke(this, RedoCountArgs);
+        }
+    }
+
+    private void InvokePropertyChanged(
+        (bool CanUndo, bool CanRedo, bool CanClear) previousFlags,
+        (int UndoCount, int RedoCount) previousCount,
+        (int PauseDepth, int BatchDepth) previousDepth)
+    {
+        InvokePropertyChanged(previousFlags, previousCount);
+        InvokePropertyChanged(previousDepth);
+    }
+
+    private void InvokePropertyChanged((int PauseDepth, int BatchDepth) previousDepth)
+    {
+        if (previousDepth.PauseDepth != PauseDepth)
+        {
+            PropertyChanged?.Invoke(this, PauseDepthArgs);
+            PropertyChanged?.Invoke(this, IsInPausedArgs);
+        }
+
+        if (previousDepth.BatchDepth != BatchDepth)
+        {
+            PropertyChanged?.Invoke(this, BatchDepthArgs);
+            PropertyChanged?.Invoke(this, IsInBatchArgs);
+        }
+    }
+
+    private void InvokePropertyChanged(
+        (bool CanUndo, bool CanRedo, bool CanClear) previousFlags,
+        (int UndoCount, int RedoCount) previousCount,
+        bool previousIsInUndoing)
+    {
+        InvokePropertyChanged(previousFlags, previousCount);
+
+        if (previousIsInUndoing != IsInUndoing)
+        {
+            PropertyChanged?.Invoke(this, IsInUndoingArgs);
+        }
+    }
 
     private sealed class BatchHistory : History
     {
@@ -204,7 +303,7 @@ public class History : INotifyPropertyChanged, IDisposable
     private (bool CanUndo, bool CanRedo, bool CanClear) CanUndoRedoClear => (CanUndo, CanRedo, CanClear);
     private (int PauseDepth, int BatchDepth) PauseBatchDepth => (PauseDepth, BatchDepth);
 
-    private record struct HistoryAction(Action Undo, Action Redo);
+    private readonly record struct HistoryAction(Action Undo, Action Redo);
     private readonly Stack<HistoryAction> _undoStack = new();
     private readonly Stack<HistoryAction> _redoStack = new();
 
@@ -215,4 +314,7 @@ public class History : INotifyPropertyChanged, IDisposable
     private static readonly PropertyChangedEventArgs RedoCountArgs = new(nameof(RedoCount));
     private static readonly PropertyChangedEventArgs PauseDepthArgs = new(nameof(PauseDepth));
     private static readonly PropertyChangedEventArgs BatchDepthArgs = new(nameof(BatchDepth));
+    private static readonly PropertyChangedEventArgs IsInPausedArgs = new(nameof(IsInPaused));
+    private static readonly PropertyChangedEventArgs IsInBatchArgs = new(nameof(IsInBatch));
+    private static readonly PropertyChangedEventArgs IsInUndoingArgs = new(nameof(IsInUndoing));
 }
