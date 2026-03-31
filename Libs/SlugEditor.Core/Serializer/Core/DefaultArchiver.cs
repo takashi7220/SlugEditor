@@ -93,6 +93,17 @@ public sealed class DefaultArchiver : IArchiver
             prop.SetValue(instance, Unarchive(prop.PropertyType, child));
         }
 
+        foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.Public))
+        {
+            var child = node.Children.FirstOrDefault(x => string.Equals(x.Name, field.Name, StringComparison.Ordinal));
+            if (child is null)
+            {
+                continue;
+            }
+
+            field.SetValue(instance, Unarchive(field.FieldType, child));
+        }
+
         return instance;
     }
 
@@ -170,6 +181,12 @@ public sealed class DefaultArchiver : IArchiver
         foreach (var prop in props)
         {
             node.Children.Add(ArchiveInternal(prop.PropertyType, prop.GetValue(value), prop.Name));
+        }
+
+        var fields = runtimeType.GetFields(BindingFlags.Instance | BindingFlags.Public);
+        foreach (var field in fields)
+        {
+            node.Children.Add(ArchiveInternal(field.FieldType, field.GetValue(value), field.Name));
         }
 
         return node;
