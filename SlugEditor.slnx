@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/Libs/">
+    <Project Path="Libs/SlugEditor.Core/SlugEditor.Core.csproj" Id="29655f8b-2496-4c3d-bee3-bdf4d603726e" />
+    <Project Path="Libs/SlugEditor.Models/SlugEditor.Models.csproj" Id="f82810cf-5882-44f4-88fb-f0ac1680d32c" />
+    <Project Path="Libs/SlugEditor.ViewModels/SlugEditor.ViewModels.csproj" Id="29f894ee-62ab-4f32-94f5-b72bd6d36d75" />
+    <Project Path="Libs/SlugEditor.Views/SlugEditor.Views.csproj" Id="d43be151-5264-40d0-a70d-d55de105a428" />
+  </Folder>
+  <Folder Name="/Samples/" />
+  <Folder Name="/Tests/">
+    <Project Path="Tests/SlugEditor.Core.Test/SlugEditor.Core.Test.csproj" Id="2e84e39e-d0be-42ec-a189-e507cf4b321b" />
+    <Project Path="Tests/SlugEditor.Test/SlugEditor.Test.csproj" Id="d92123db-0a2b-4866-9c0a-03240c6ac902" />
+  </Folder>
+  <Project Path="SlugEditor/SlugEditor.csproj" />
+</Solution>
