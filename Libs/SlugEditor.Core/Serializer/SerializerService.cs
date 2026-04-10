@@ -1,14 +1,8 @@
-﻿using SlugEditor.Core.Assembly;
+using SlugEditor.Core.Assembly;
 using SlugEditor.Core.Serializer.Archivers;
 using SlugEditor.Core.Serializer.Backend;
 using SlugEditor.Core.Serializer.BackEnd;
 using SlugEditor.Core.Service;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Security.AccessControl;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace SlugEditor.Core.Serializer
 {
@@ -31,7 +25,7 @@ namespace SlugEditor.Core.Serializer
         public SerializerType SerializerType = SerializerType.Json;
     };
 
-    [ServiceAttribute(ServiceType.Singleton)]
+    [ServiceAttribute(ServiceType.Singleton, ServiceRegisterType.Auto)]
     public class SerializerService : IService
     {
         public SerializerService(AssemblyService assemblyService)
@@ -44,10 +38,14 @@ namespace SlugEditor.Core.Serializer
             Serialize(target, typeof(T), stream, options);
         }
 
-        public T Deserialize<T>(byte[] target, Options? options = null) where T : notnull
+        public T? Deserialize<T>(byte[] target, Options? options = null) where T : notnull
         {
             var obj = Deserialize(target, typeof(T), options);
-            return (T)obj;
+            if (obj != null)
+            {
+                return (T)obj;
+            }
+            return default(T);
         }
 
         public void Serialize(object target, Type targetType, Stream stream, Options? options = null)
@@ -127,7 +125,7 @@ namespace SlugEditor.Core.Serializer
 
         private void Initialize(AssemblyService assemblyService)
         {
-            foreach (var assembly in assemblyService.EnumerateAssembly())
+            foreach (var assembly in assemblyService.EnumerateAssemblies())
             {
                 var baseType = typeof(IDataSerializer);
                 var derivedTypes = assembly.GetTypes().Where(t => t.IsClass && !t.IsAbstract && !t.ContainsGenericParameters && baseType.IsAssignableFrom(t));
