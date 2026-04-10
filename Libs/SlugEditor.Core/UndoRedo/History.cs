@@ -1,320 +1,546 @@
+﻿using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Diagnostics;
 
-namespace SlugEditor.Core.UndoRedo;
-
-public class History : INotifyPropertyChanged, IDisposable
+namespace SlugEditor.Core.UndoRedo
 {
-    public bool CanUndo => _undoStack.Count > 0;
-    public bool CanRedo => _redoStack.Count > 0;
-    public bool CanClear => CanUndo || CanRedo;
-    public int UndoCount => _undoStack.Count;
-    public int RedoCount => _redoStack.Count;
-    public int PauseDepth { get; private set; }
-    public int BatchDepth { get; private set; }
-    public bool IsInUndoing { get; private set; }
-    public bool IsInPaused => PauseDepth > 0;
-    public bool IsInBatch => BatchDepth > 0;
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    public void Dispose()
+    public class History : INotifyPropertyChanged, IDisposable
     {
-        _batchHistory?.Dispose();
-        _batchHistory = null;
-        _undoStack.Clear();
-        _redoStack.Clear();
-    }
+        public bool CanUndo => m_undoStack.Count > 0;
+        public bool CanRedo => m_redoStack.Count > 0;
+        public bool CanClear => CanUndo || CanRedo;
+        public int UndoCount => m_undoStack.Count;
+        public int RedoCount => m_redoStack.Count;
+        public int PauseDepth { get; private set; }
+        public int BatchDepth { get; private set; }
+        public bool IsInUndoing { get; private set; }
+        public bool IsInPaused => PauseDepth > 0;
+        public bool IsInBatch => BatchDepth > 0;
 
-    public void BeginPause()
-    {
-        var currentDepth = PauseBatchDepth;
+        public event PropertyChangedEventHandler? PropertyChanged;
 
-        PauseDepth++;
-        InvokePropertyChanged(currentDepth);
-    }
+        internal readonly CollectionChangedWeakEventManager CollectionChangedWeakEventManager = new();
 
-    public void EndPause()
-    {
-        if (PauseDepth is 0)
+        public void Dispose()
         {
-            throw new InvalidOperationException("Pause is not begun.");
         }
 
-        var currentDepth = PauseBatchDepth;
-
-        PauseDepth--;
-        InvokePropertyChanged(currentDepth);
-    }
-
-    public void BeginBatch()
-    {
-        var currentDepth = PauseBatchDepth;
-
-        BatchDepth++;
-        if (BatchDepth is 1)
+        public void BeginPause()
         {
-            _batchHistory = new BatchHistory();
+            ++PauseDepth;
         }
 
-        InvokePropertyChanged(currentDepth);
-    }
-
-    public void EndBatch()
-    {
-        if (BatchDepth is 0)
+        public void EndPause()
         {
-            throw new InvalidOperationException("Batch recording has not begun.");
-        }
-
-        var currentFlags = CanUndoRedoClear;
-        var currentUndoRedoCount = UndoRedoCount;
-        var currentDepth = PauseBatchDepth;
-
-        BatchDepth--;
-        if (BatchDepth is 0)
-        {
-            var batchHistory = _batchHistory;
-            _batchHistory = null;
-
-            if (batchHistory is not null && batchHistory.CanUndo)
+            if (PauseDepth is 0)
             {
-                _undoStack.Push(new HistoryAction(batchHistory.UndoAll, batchHistory.RedoAll));
+                throw new InvalidOperationException("Pause is not begun.");
+            }
 
-                if (_redoStack.Count > 0)
+            --PauseDepth;
+        }
+
+        public void BeginBatch()
+        {
+            ++BatchDepth;
+
+            if (BatchDepth is 1)
+            {
+                BeginBatchInternal();
+            }
+        }
+
+        public void EndBatch()
+        {
+            if (BatchDepth is 0)
+            {
+                throw new InvalidOperationException("Batch recording has not begun.");
+            }
+
+            --BatchDepth;
+
+            if (BatchDepth is 0)
+            {
+                EndBatchInternal();
+            }
+        }
+
+        public void Undo()
+        {
+            if (IsInBatch)
+            {
+                throw new InvalidOperationException("Can't call Undo() during batch recording.");
+            }
+
+            if (IsInPaused)
+            {
+                throw new InvalidOperationException("Can't call Undo() during in paused.");
+            }
+
+            if (CanUndo is false)
+            {
+                return;
+            }
+
+            var currentFlags = CanUndoRedoClear;
+            var currentUndoRedoCount = UndoRedoCount;
+            var currentDepth = PauseBatchDepth;
+
+            var action = m_undoStack.Pop();
+
+            try
+            {
+                IsInUndoing = true;
+                action.Undo();
+            }
+            finally
+            {
+                IsInUndoing = false;
+            }
+
+            m_redoStack.Push(action);
+
+            InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+        }
+
+        public void Redo()
+        {
+            if (IsInBatch)
+            {
+                throw new InvalidOperationException("Can't call Redo() during batch recording.");
+            }
+
+            if (IsInPaused)
+            {
+                throw new InvalidOperationException("Can't call Redo() during in paused.");
+            }
+
+            if (CanRedo is false)
+            {
+                return;
+            }
+
+            var currentFlags = CanUndoRedoClear;
+            var currentUndoRedoCount = UndoRedoCount;
+            var currentDepth = PauseBatchDepth;
+
+            var action = m_redoStack.Pop();
+
+            try
+            {
+                IsInUndoing = true;
+                action.Redo();
+            }
+            finally
+            {
+                IsInUndoing = false;
+            }
+
+            m_undoStack.Push(action);
+
+            InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+        }
+
+        public void Push(Action undo, Action redo)
+        {
+            if (IsInPaused)
+            {
+                return;
+            }
+
+            if (IsInBatch)
+            {
+                _ = m_batchHistory ?? throw new NullReferenceException();
+
+                m_batchHistory.Push(undo, redo);
+                return;
+            }
+
+            var currentFlags = CanUndoRedoClear;
+            var currentUndoRedoCount = UndoRedoCount;
+            var currentDepth = PauseBatchDepth;
+
+            m_undoStack.Push(new HistoryAction(undo, redo));
+
+            if (m_redoStack.Count > 0)
+            {
+                m_redoStack.Clear();
+            }
+
+            InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+        }
+
+        public void Clear()
+        {
+            var currentFlags = CanUndoRedoClear;
+            var currentUndoRedoCount = UndoRedoCount;
+            var currentDepth = PauseBatchDepth;
+
+            m_undoStack.Clear();
+            m_redoStack.Clear();
+
+            InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
+        }
+
+        internal void OnCollectionPropertyCollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            if (IsInUndoing)
+            {
+                return;
+            }
+
+            var list = sender as IList ?? throw new NullReferenceException();
+
+            switch (e.Action)
+            {
+                case NotifyCollectionChangedAction.Add:
+                    {
+                        void DoRedo()
+                        {
+                            var addItems = e.NewItems ?? throw new NullReferenceException();
+                            var addCount = addItems.Count;
+                            var addIndex = e.NewStartingIndex;
+
+                            // ICollectionItem
+                            for (var i = 0; i != addCount; ++i)
+                            {
+                                list.Insert(addIndex + i, addItems[i]);
+
+                                if (addItems[i] is ICollectionItem collItem)
+                                {
+                                    collItem.Changed(CollectionItemChangedInfo.Add);
+                                }
+                            }
+                        }
+
+                        void DoUndo()
+                        {
+                            var addItems = e.NewItems ?? throw new NullReferenceException();
+                            var addCount = addItems.Count;
+                            var addIndex = e.NewStartingIndex;
+
+                            // ICollectionItem
+                            for (var i = 0; i != addCount; ++i)
+                            {
+                                list.RemoveAt(addIndex + i);
+
+                                if (addItems[i] is ICollectionItem collItem)
+                                {
+                                    collItem.Changed(CollectionItemChangedInfo.Remove);
+                                }
+                            }
+                        }
+
+                        // ICollectionItem
+                        {
+                            var addItems = e.NewItems ?? throw new NullReferenceException();
+                            var addCount = addItems.Count;
+
+                            for (var i = 0; i != addCount; ++i)
+                            {
+                                if (addItems[i] is ICollectionItem collItem)
+                                {
+                                    collItem.Changed(CollectionItemChangedInfo.Add);
+                                }
+                            }
+                        }
+
+                        Push(DoUndo, DoRedo);
+                        break;
+                    }
+
+                case NotifyCollectionChangedAction.Move:
+                    {
+                        _ = e.OldItems ?? throw new NullReferenceException();
+                        _ = e.NewItems ?? throw new NullReferenceException();
+
+                        if (e.OldItems.Count is not 1)
+                            throw new NotImplementedException();
+
+                        if (e.NewItems.Count is not 1)
+                            throw new NotImplementedException();
+
+                        void DoRedo()
+                        {
+                            var src = e.OldStartingIndex;
+                            var dst = e.NewStartingIndex;
+
+                            var item = list[src];
+                            list.RemoveAt(src);
+
+                            list.Insert(dst, item);
+
+                            // ICollectionItem
+                            {
+                                if (item is ICollectionItem collItem)
+                                {
+                                    collItem.Changed(CollectionItemChangedInfo.Move);
+                                }
+                            }
+                        }
+
+                        void DoUndo()
+                        {
+                            var src = e.NewStartingIndex;
+                            var dst = e.OldStartingIndex;
+
+                            var item = list[src];
+                            list.RemoveAt(src);
+
+                            list.Insert(dst, item);
+
+                            // ICollectionItem
+                            if (item is ICollectionItem collItem)
+                            {
+                                collItem.Changed(CollectionItemChangedInfo.Move);
+                            }
+                        }
+
+                        // ICollectionItem
+                        {
+                            if (e.OldItems[0] is ICollectionItem collItem)
+                                collItem.Changed(CollectionItemChangedInfo.Move);
+                        }
+
+                        Push(DoUndo, DoRedo);
+                        break;
+                    }
+
+                case NotifyCollectionChangedAction.Remove:
+                    {
+                        _ = e.OldItems ?? throw new NullReferenceException();
+
+                        if (e.OldItems.Count is not 1)
+                            throw new NotImplementedException();
+
+                        if (e.NewItems is not null)
+                            throw new NotImplementedException();
+
+                        var item = e.OldItems[0];
+
+                        void DoRedo()
+                        {
+                            item = list[e.OldStartingIndex];
+                            list.RemoveAt(e.OldStartingIndex);
+
+                            // ICollectionItem
+                            {
+                                if (item is ICollectionItem collItem)
+                                {
+                                    collItem.Changed(CollectionItemChangedInfo.Remove);
+                                }
+                            }
+                        }
+
+                        void DoUndo()
+                        {
+                            list.Insert(e.OldStartingIndex, item);
+
+                            // ICollectionItem
+                            {
+                                if (item is ICollectionItem collItem)
+                                {
+                                    collItem.Changed(CollectionItemChangedInfo.Add);
+                                }
+                            }
+                        }
+
+                        // ICollectionItem
+                        {
+                            if (e.OldItems[0] is ICollectionItem collItem)
+                            {
+                                collItem.Changed(CollectionItemChangedInfo.Remove);
+                            }
+                        }
+
+                        Push(DoUndo, DoRedo);
+                        break;
+                    }
+
+                case NotifyCollectionChangedAction.Replace:
+                    {
+                        _ = e.OldItems ?? throw new NullReferenceException();
+                        _ = e.NewItems ?? throw new NullReferenceException();
+
+                        if (e.OldItems.Count is not 1)
+                            throw new NotImplementedException();
+
+                        if (e.NewItems.Count is not 1)
+                            throw new NotImplementedException();
+
+                        if (e.NewStartingIndex != e.OldStartingIndex)
+                            throw new NotImplementedException();
+
+                        void DoRedo()
+                        {
+                            var index = e.OldStartingIndex;
+                            var oldItem = list[index];
+                            list[index] = e.NewItems[0];
+
+                            // ICollectionItem
+                            {
+                                if (oldItem is ICollectionItem oldCollItem)
+                                {
+                                    oldCollItem.Changed(CollectionItemChangedInfo.Remove);
+                                }
+
+                                if (list[index] is ICollectionItem collItem)
+                                {
+                                    collItem.Changed(CollectionItemChangedInfo.Add);
+                                }
+                            }
+                        }
+
+                        void DoUndo()
+                        {
+                            var index = e.OldStartingIndex;
+                            var oldItem = list[index];
+                            list[index] = e.OldItems[0];
+
+                            // ICollectionItem
+                            {
+                                if (oldItem is ICollectionItem oldCollItem)
+                                {
+                                    oldCollItem.Changed(CollectionItemChangedInfo.Add);
+                                }
+
+                                if (list[index] is ICollectionItem collItem)
+                                {
+                                    collItem.Changed(CollectionItemChangedInfo.Remove);
+                                }
+                            }
+                        }
+
+                        // ICollectionItem
+                        {
+                            if (e.OldItems[0] is ICollectionItem oldCollItem)
+                            {
+                                oldCollItem.Changed(CollectionItemChangedInfo.Remove);
+                            }
+
+                            if (e.NewItems[0] is ICollectionItem newCollItem)
+                            {
+                                newCollItem.Changed(CollectionItemChangedInfo.Add);
+                            }
+                        }
+
+                        Push(DoUndo, DoRedo);
+                        break;
+                    }
+
+                case NotifyCollectionChangedAction.Reset:
+                    {
+                        if (IsInPaused)
+                            break;
+
+                        throw new NotSupportedException("Clear() is not support. Use ClearEx()");
+                    }
+
+                default:
+                    throw new ArgumentOutOfRangeException();
+            }
+        }
+
+        private void InvokePropertyChanged((bool CanUndo, bool CanRedo, bool CanClear) flags, (int UndoCount, int RedoCount) undoRedoCount, (int PauseDepth, int BatchDepth) depthCount)
+        {
+            if (PropertyChanged is null)
+            {
+                return;
+            }
+
+            if (flags.CanUndo != CanUndo)
+            {
+                PropertyChanged.Invoke(this, CanUndoArgs);
+            }
+
+            if (flags.CanRedo != CanRedo)
+            {
+                PropertyChanged.Invoke(this, CanRedoArgs);
+            }
+
+            if (flags.CanClear != CanClear)
+            {
+                PropertyChanged.Invoke(this, CanClearArgs);
+            }
+
+            if (undoRedoCount.UndoCount != UndoCount)
+            {
+                PropertyChanged.Invoke(this, UndoCountArgs);
+            }
+
+            if (undoRedoCount.RedoCount != RedoCount)
+            {
+                PropertyChanged.Invoke(this, RedoCountArgs);
+            }
+
+            if (depthCount.PauseDepth != PauseDepth)
+            {
+                PropertyChanged.Invoke(this, PauseDepthArgs);
+            }
+
+            if (depthCount.BatchDepth != BatchDepth)
+            {
+                PropertyChanged.Invoke(this, BatchDepthArgs);
+            }
+        }
+
+        private void BeginBatchInternal()
+        {
+            Debug.Assert(m_batchHistory is null);
+
+            m_batchHistory = new BatchHistory();
+        }
+
+        private void EndBatchInternal()
+        {
+            Debug.Assert(m_batchHistory is not null);
+
+            if (m_batchHistory.UndoRedoCount != (UndoCount: 0, RedoCount: 0))
+                Push(m_batchHistory.UndoAll, m_batchHistory.RedoAll);
+
+            m_batchHistory.Dispose();
+            m_batchHistory = null;
+        }
+
+
+        private sealed class BatchHistory : History
+        {
+            public void UndoAll()
+            {
+                while (CanUndo)
                 {
-                    _redoStack.Clear();
+                    Undo();
                 }
             }
 
-            batchHistory?.Dispose();
-        }
-
-        InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentDepth);
-    }
-
-    public void Undo()
-    {
-        if (IsInBatch)
-        {
-            throw new InvalidOperationException("Can't call Undo() during batch recording.");
-        }
-
-        if (IsInPaused)
-        {
-            throw new InvalidOperationException("Can't call Undo() while paused.");
-        }
-
-        if (!CanUndo)
-        {
-            return;
-        }
-
-        var currentFlags = CanUndoRedoClear;
-        var currentUndoRedoCount = UndoRedoCount;
-        var currentIsInUndoing = IsInUndoing;
-
-        var action = _undoStack.Pop();
-        try
-        {
-            IsInUndoing = true;
-            action.Undo();
-        }
-        finally
-        {
-            IsInUndoing = false;
-        }
-
-        _redoStack.Push(action);
-
-        InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentIsInUndoing);
-    }
-
-    public void Redo()
-    {
-        if (IsInBatch)
-        {
-            throw new InvalidOperationException("Can't call Redo() during batch recording.");
-        }
-
-        if (IsInPaused)
-        {
-            throw new InvalidOperationException("Can't call Redo() while paused.");
-        }
-
-        if (!CanRedo)
-        {
-            return;
-        }
-
-        var currentFlags = CanUndoRedoClear;
-        var currentUndoRedoCount = UndoRedoCount;
-        var currentIsInUndoing = IsInUndoing;
-
-        var action = _redoStack.Pop();
-        try
-        {
-            IsInUndoing = true;
-            action.Redo();
-        }
-        finally
-        {
-            IsInUndoing = false;
-        }
-
-        _undoStack.Push(action);
-
-        InvokePropertyChanged(currentFlags, currentUndoRedoCount, currentIsInUndoing);
-    }
-
-    public void Push(Action undo, Action redo)
-    {
-        ArgumentNullException.ThrowIfNull(undo);
-        ArgumentNullException.ThrowIfNull(redo);
-
-        if (IsInPaused)
-        {
-            return;
-        }
-
-        if (IsInBatch)
-        {
-            _ = _batchHistory ?? throw new InvalidOperationException("Batch recording has not begun.");
-            _batchHistory.Push(undo, redo);
-            return;
-        }
-
-        var currentFlags = CanUndoRedoClear;
-        var currentUndoRedoCount = UndoRedoCount;
-
-        _undoStack.Push(new HistoryAction(undo, redo));
-        if (_redoStack.Count > 0)
-        {
-            _redoStack.Clear();
-        }
-
-        InvokePropertyChanged(currentFlags, currentUndoRedoCount);
-    }
-
-    public void Clear()
-    {
-        if (_undoStack.Count is 0 && _redoStack.Count is 0)
-        {
-            return;
-        }
-
-        var currentFlags = CanUndoRedoClear;
-        var currentUndoRedoCount = UndoRedoCount;
-
-        _undoStack.Clear();
-        _redoStack.Clear();
-
-        InvokePropertyChanged(currentFlags, currentUndoRedoCount);
-    }
-
-    private void InvokePropertyChanged(
-        (bool CanUndo, bool CanRedo, bool CanClear) previousFlags,
-        (int UndoCount, int RedoCount) previousCount)
-    {
-        if (previousFlags.CanUndo != CanUndo)
-        {
-            PropertyChanged?.Invoke(this, CanUndoArgs);
-        }
-
-        if (previousFlags.CanRedo != CanRedo)
-        {
-            PropertyChanged?.Invoke(this, CanRedoArgs);
-        }
-
-        if (previousFlags.CanClear != CanClear)
-        {
-            PropertyChanged?.Invoke(this, CanClearArgs);
-        }
-
-        if (previousCount.UndoCount != UndoCount)
-        {
-            PropertyChanged?.Invoke(this, UndoCountArgs);
-        }
-
-        if (previousCount.RedoCount != RedoCount)
-        {
-            PropertyChanged?.Invoke(this, RedoCountArgs);
-        }
-    }
-
-    private void InvokePropertyChanged(
-        (bool CanUndo, bool CanRedo, bool CanClear) previousFlags,
-        (int UndoCount, int RedoCount) previousCount,
-        (int PauseDepth, int BatchDepth) previousDepth)
-    {
-        InvokePropertyChanged(previousFlags, previousCount);
-        InvokePropertyChanged(previousDepth);
-    }
-
-    private void InvokePropertyChanged((int PauseDepth, int BatchDepth) previousDepth)
-    {
-        if (previousDepth.PauseDepth != PauseDepth)
-        {
-            PropertyChanged?.Invoke(this, PauseDepthArgs);
-            PropertyChanged?.Invoke(this, IsInPausedArgs);
-        }
-
-        if (previousDepth.BatchDepth != BatchDepth)
-        {
-            PropertyChanged?.Invoke(this, BatchDepthArgs);
-            PropertyChanged?.Invoke(this, IsInBatchArgs);
-        }
-    }
-
-    private void InvokePropertyChanged(
-        (bool CanUndo, bool CanRedo, bool CanClear) previousFlags,
-        (int UndoCount, int RedoCount) previousCount,
-        bool previousIsInUndoing)
-    {
-        InvokePropertyChanged(previousFlags, previousCount);
-
-        if (previousIsInUndoing != IsInUndoing)
-        {
-            PropertyChanged?.Invoke(this, IsInUndoingArgs);
-        }
-    }
-
-    private sealed class BatchHistory : History
-    {
-        public void UndoAll()
-        {
-            while (CanUndo)
+            public void RedoAll()
             {
-                Undo();
+                while (CanRedo)
+                {
+                    Redo();
+                }
             }
         }
 
-        public void RedoAll()
-        {
-            while (CanRedo)
-            {
-                Redo();
-            }
-        }
+        private BatchHistory? m_batchHistory;
+
+        private (int UndoCount, int RedoCount) UndoRedoCount => (UndoCount, RedoCount);
+        private (bool CanUndo, bool CanRedo, bool CanClear) CanUndoRedoClear => (CanUndo, CanRedo, CanClear);
+        private (int PauseDepth, int BatchDepth) PauseBatchDepth => (PauseDepth, BatchDepth);
+
+        private record struct HistoryAction(Action Undo, Action Redo);
+        private readonly Stack<HistoryAction> m_undoStack = new();
+        private readonly Stack<HistoryAction> m_redoStack = new();
+
+        private static readonly PropertyChangedEventArgs CanUndoArgs = new(nameof(CanUndo));
+        private static readonly PropertyChangedEventArgs CanRedoArgs = new(nameof(CanRedo));
+        private static readonly PropertyChangedEventArgs CanClearArgs = new(nameof(CanClear));
+        private static readonly PropertyChangedEventArgs UndoCountArgs = new(nameof(UndoCount));
+        private static readonly PropertyChangedEventArgs RedoCountArgs = new(nameof(RedoCount));
+        private static readonly PropertyChangedEventArgs PauseDepthArgs = new(nameof(PauseDepth));
+        private static readonly PropertyChangedEventArgs BatchDepthArgs = new(nameof(BatchDepth));
     }
-
-    private BatchHistory? _batchHistory;
-
-    private (int UndoCount, int RedoCount) UndoRedoCount => (UndoCount, RedoCount);
-    private (bool CanUndo, bool CanRedo, bool CanClear) CanUndoRedoClear => (CanUndo, CanRedo, CanClear);
-    private (int PauseDepth, int BatchDepth) PauseBatchDepth => (PauseDepth, BatchDepth);
-
-    private readonly record struct HistoryAction(Action Undo, Action Redo);
-    private readonly Stack<HistoryAction> _undoStack = new();
-    private readonly Stack<HistoryAction> _redoStack = new();
-
-    private static readonly PropertyChangedEventArgs CanUndoArgs = new(nameof(CanUndo));
-    private static readonly PropertyChangedEventArgs CanRedoArgs = new(nameof(CanRedo));
-    private static readonly PropertyChangedEventArgs CanClearArgs = new(nameof(CanClear));
-    private static readonly PropertyChangedEventArgs UndoCountArgs = new(nameof(UndoCount));
-    private static readonly PropertyChangedEventArgs RedoCountArgs = new(nameof(RedoCount));
-    private static readonly PropertyChangedEventArgs PauseDepthArgs = new(nameof(PauseDepth));
-    private static readonly PropertyChangedEventArgs BatchDepthArgs = new(nameof(BatchDepth));
-    private static readonly PropertyChangedEventArgs IsInPausedArgs = new(nameof(IsInPaused));
-    private static readonly PropertyChangedEventArgs IsInBatchArgs = new(nameof(IsInBatch));
-    private static readonly PropertyChangedEventArgs IsInUndoingArgs = new(nameof(IsInUndoing));
 }
